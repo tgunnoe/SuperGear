@@ -27,8 +27,10 @@ behavioural oracle. Milestones, in order:
    claim with evidence. **WIP.**
 3. **Reimplementation** — Rust crates that read the shipped data and, in
    time, play the game; Nickel carries contracts and configuration.
-   **WIP:** `crates/hgpack` reads the resource pack completely (spec §5),
-   and `contracts/pack.ncl` checks the manifest it prints.
+   **WIP:** `crates/hgpack` reads the resource pack completely, and
+   `crates/hgbwd` reads the chunk structure of every shipped `BWD` file
+   (spec §5). `contracts/pack.ncl` and `contracts/bwd.ncl` check what
+   the two commands print.
 
 ## Requirements
 
@@ -82,9 +84,11 @@ Each: statement · grounding · signpost (what defeats it).
 Each: statement · why open · signpost (what resolves it).
 
 - **U3 Engine lineage.** Whether Interstate '76 / MechWarrior 2 format
-  knowledge (Open76, community write-ups) transfers. · Reported by
-  secondary sources only. · A byte-level match or mismatch between a
-  Heavy Gear format and its claimed ancestor.
+  knowledge (Open76, community write-ups) transfers. · A forum post
+  places MW2's `GPS` fields at three offsets, and Heavy Gear's `GPS`
+  chunks match two of them (spec §5, BWD files); the MW2 side is
+  secondary. · A MechWarrior 2 `BWD` or `PRJ` file compared byte for
+  byte with Heavy Gear's layout.
 - **U4 Headless frames.** The smoke test judges liveness and data loads,
   not pixels. · `ffmpeg -f x11grab` captures Xvfb frames correctly
   (2026-11-09), but the smoke test still captures with ImageMagick
@@ -115,6 +119,15 @@ Each: statement · why open · signpost (what resolves it).
   wrong copy of a repeated key would diverge from the oracle. · The
   index reader and lookup in `HGSHELL.DLL` or `HGSIM.DLL` located and
   read, plus a `PCX`/`PCXX` and a `WAV`/`WAVX` payload pair compared.
+- **U10 BWD semantics.** What the chunks of a `BWD` file mean beyond
+  their framing (spec §5, BWD files): the field layouts of `OBJ`, `GT`,
+  `NAVP`, `BLK`, `BLKX`, `MTBL`, `STAR`, `DTBL`, `GPS` and the art
+  chunks, the name-reference slot, whether a second `BTAG` nests or
+  replaces, and whether the 74 names in the tag table pair with the
+  tags by position. · The files' structure is proved; their contents
+  are not, and a reimplementation needs them to place anything. · The
+  handler each tag reaches from the tag table in `HGSIM.DLL` located
+  and read.
 
 ## Spec Pointers
 
@@ -136,19 +149,26 @@ Each: statement · why open · signpost (what resolves it).
    `programs.cdemu.enable = true`, user in group `cdrom`):
    `scripts/wine-cdaudio.sh`, which the run and smoke scripts call, loads
    Disc 2 into it.
-3. Read the pack: `cargo run -p hgpack --release -- verify <game-dir>`,
-   or `list [--json]`, or `extract <game-dir> <out-dir> [NAME.TYPE ...]`.
-   After `scripts/wine-install.sh` the game directory is
-   `~/.local/share/supergear/wine/drive_c/Games/HeavyGear`. Extract into
-   `.scratch/` or another ignored directory, never into tracked paths
-   (I1).
+3. Read the data:
+   - The pack: `cargo run -p hgpack --release -- verify <game-dir>`, or
+     `list [--json]`, or `extract <game-dir> <out-dir> [NAME.TYPE ...]`.
+     After `scripts/wine-install.sh` the game directory is
+     `~/.local/share/supergear/wine/drive_c/Games/HeavyGear`.
+   - `BWD` files, once extracted:
+     `cargo run -p hgbwd --release -- check <file-or-dir> ...`, or
+     `dump [--json] <file.bwd>`.
+
+   Extract into `.scratch/` or another ignored directory, never into
+   tracked paths (I1).
 4. Validate before committing:
-   - `nix flake check`: builds `hgpack`, runs its tests (contract tests
-     included), and runs clippy and rustfmt, for the host's system.
-     `nix flake check --all-systems` adds aarch64-linux, which this host
-     builds through binfmt emulation (slowly).
+   - `nix flake check`: builds both commands, runs every crate's tests
+     (contract tests included), and runs clippy and rustfmt, for the
+     host's system. `--all-systems` only evaluates aarch64-linux; to
+     build and test it, which this host does through binfmt emulation
+     (slowly), run
+     `nix build .#checks.aarch64-linux.tools .#checks.aarch64-linux.lint`.
    - The tests that need the installed game:
-     `SUPERGEAR_GAME=<game-dir> cargo test -p hgpack --release -- --include-ignored`.
+     `SUPERGEAR_GAME=<game-dir> cargo test --release -- --include-ignored`.
    - Links: predicate's `skills/doc-audit/scripts/check_docs.py .`.
    - The tracker:
      `nickel export .ledger/state/context_map.yaml --apply-contract <predicate>/ledger/contracts/context_map_apply.ncl`.
@@ -160,11 +180,12 @@ Each: statement · why open · signpost (what resolves it).
 ## Structure
 
 - **Core:** `docs/spec/` (the deliverable), `AGENTS.md` (this anchor),
-  `crates/` (the Rust workspace: `hgpack`, the resource-pack reader and
-  its command), `contracts/` (Nickel contracts over data the crates
-  derive: `pack.ncl`).
+  `crates/` (the Rust workspace: `hgpack`, the resource-pack reader,
+  and `hgbwd`, the `BWD` reader, each with its command), `contracts/`
+  (Nickel contracts over what the commands print: `pack.ncl`,
+  `bwd.ncl`).
 - **Host integration:** `scripts/` (disc conversion, Wine prefix, smoke
-  test), `flake.nix` (toolchain, `hgpack` package and checks, for both
-  targets).
+  test), `flake.nix` (toolchain, the `tools` package with both commands,
+  and checks, for both targets).
 - **Volatile:** `.scratch/` (uncommitted working set), `.ledger/`
   (predicate flight recorder, its own repository).

@@ -375,45 +375,154 @@ PRJ Chunk", `SYSERR_INCOMPATIBLEBWDREV`); PRJ packs hold audio and "bpl
 polygon" resources; there are mech-spec, GAMEPIECE class, scenario and
 mission tables, Gouraud / unmapped / mapped vertex records, a geometry
 cache with block nesting, and DOS-era leftovers (`digpak driver`, `x/ems`,
-`xems swap pages`). The engine lineage to Interstate '76 and MechWarrior 2
-is reported by community sources and is **UNVERIFIED** here.
+`xems swap pages`). Community sources report a lineage from Interstate
+'76 and MechWarrior 2, which is **UNVERIFIED** here. Two `GPS` field
+offsets that match MechWarrior 2's are the one byte-level lead so far
+(BWD files, below).
 
 ### BWD files
 
-First look, from two files walked on 2026-11-18. The two are the
-training scenario `M33_SCN1.BWD`, extracted with `hgpack`, and the
-generated Tour of Duty scenario `RAN1SCN1.BWD`, a loose file. A `BWD`
-file is a 12-byte header followed by chunks:
-- The header is char\[4\] `BWD\0`, a u32 total size equal to the file's
-  length, and a u32 of unknown meaning (0x1855 and 0x0575 in the two
-  files).
-- Each chunk is a char\[4\] tag (NUL-padded) and a u32 size that counts
-  the chunk's own 8 bytes, then its data.
+`HG.INI` calls a `BWD` a "world description" file, which the engine
+reads loose or extracts from the pack (`SYSERR_BWDFILE`,
+`SYSERR_CANTOPENBWDDOSFILE`, `SYSERR_CANTOPENBWDPRJFILE`).
+`crates/hgbwd` implements this subsection. `hgbwd check` and
+`contracts/bwd.ncl` check it against the shipped files. On 2026-11-18
+all 714 parsed: the 705 in the pack, extracted with `hgpack`, and the 9
+loose ones the game generates. Together they hold 31,337 chunks. All
+integers are little-endian. Text fields are NUL-padded.
 
-The chunks tile both files exactly. `M33_SCN1.BWD` (10,483 B) holds 74
-top-level chunks:
+| Offset | Size | Field | Shipped value |
+| ---: | ---: | :--- | :--- |
+| 0x00 | 4 | magic | `BWD\0` |
+| 0x04 | 4 | file size | the file's length |
+| 0x08 | 4 | size of the largest chunk | equal to it in all 714 files |
+| 0x0C | | chunks, to the end of the file | |
 
-| Tag | Count | Notes |
-| :--- | ---: | :--- |
-| `REV` | 1 | format revision, the text `1.22` |
-| `DTBL` | 1 | |
-| `INCL` | 6 | names another `BWD` to load; text at chunk offset 0x0A |
-| `CAMO` | 3 | |
-| `STAR` | 1 | |
-| `MTBL` | 3 | |
-| `BTAG` | 20 | |
-| `ETAG` | 19 | |
-| `GPS` | 3 | |
-| `NAVP` | 17 | |
+Each chunk is a char\[4\] tag, a u32 size that counts the chunk's own 8
+bytes, then its data. The chunks follow one another with no gap and end
+exactly at the file's end. Every file begins with `REV`, the text `1.22`
+in all 714, then `DTBL`. `HG.INI` names an incompatible revision as an
+error (`SYSERR_INCOMPATIBLEBWDREV`), and "Unable to allocate memory for
+BWD chunk buffer" (`SYSERR_BWDREADMEM`). That the third header word
+sizes that buffer is an inference.
 
-The six `INCL` targets are `m33_tabl`, `formatns`, `m33_art1`,
-`gearsht1`, `m33_grnd` and `m33_obj1`.
+**The tag table.** `HGSHELL.DLL` (file offset 0x200570, VA 0x10202570)
+and `HGSIM.DLL` (file offset 0x1331E8, VA 0x101349E8) hold the same
+table of 97 four-byte entries, in `.data`. The first is `BWD`; the other
+96 are the chunk tags the engine knows, in this order:
 
-`RAN1SCN1.BWD` (2,502 B) holds `REV` `1.22`, `DTBL`, `INCL`, `MUSI`
-`track2`, `STAR`, `MTBL` and more `INCL` chunks. `MUSI` puts its text at
-offset 0x0A too, which is where the scenario loader copies it from
-(§4). Whether `BTAG` and `ETAG` bracket nested groups, given 20 of one
-against 19 of the other, is **UNVERIFIED**.
+`REV DTBL PLNT PALG TERR CLIM LITE VWSP VWST INIT STBL MTBL GTBL BMPJ
+BMID BSEC BMEN FPRJ HRZM GNDM SKYM PLGO BLKX REPR ENDR BLK ELSB ENDB OBJ
+ANIM SCRG THNG GP CPTF PITF VPTF HUDF MGDF EYEO GT OBJL BTHG XPLO NAVP
+NAVO LITO TSK POS ROT INCL GRP GPS MOFF MON GON GOFF ANM2 STAR VIEW POFO
+AFFL ORDR MUSI ASND LTBL PTBL FTBL HTXT PDSC SDSC SUPS CPGN PILT TECH
+NEWS CTNT DSSR MHLT WNLT THLT SMHL SWNL PTLT SLST FLST WTHR AMMO MLIT
+CAMO EQUP MLUT TLUT BTAG ETAG HGXP HGBT`
+
+74 lowercase names follow the table (`bwd rev dtbl planet palette_grp
+terrain planet light window start now scenario_table mission_table …
+include group gpspec mangle_off mangle_on … music … formation
+hidden_text planet_desc star_desc startupscreen hgexplode projectile`).
+Paired by position, they name `BWD` through `PILT`, and the last 23
+tags have none. Most pairs read naturally: `OBJ` object, `NAVP`
+navpoint, `INCL` include, `GPS` gpspec, `MON` mangle_on, `BLK` block,
+`ENDB` endblock. A few do not: `CLIM` planet, `INIT` now, `CPGN`
+hgexplode, `PILT` projectile. The pairing is therefore
+**UNVERIFIED**.
+
+37 of the 96 tags occur in the shipped files, all of them in the table.
+A tag outside it is presumably `SYSERR_BADBWDCHUNK`, "unrecognizable
+chunk encountered", which is **UNVERIFIED**.
+32 of the 37 have one size throughout:
+
+| Tag | Chunk size (B) | Chunks | Data layout |
+| :--- | ---: | ---: | :--- |
+| `OBJ` | 68 | 11,959 | **UNVERIFIED** |
+| `GT` | 76 | 2,203 | **UNVERIFIED** |
+| `BTAG` | 24 | 2,077 | char\[16\] group name |
+| `ETAG` | 12 | 2,074 | u32, 0 in every chunk |
+| `INCL` | 20 | 1,719 | u16 slot, char\[10\] name of a `BWD` to include |
+| `TLUT` | 20 | 1,474 | u16 slot, char\[10\] name of a `TLT` record |
+| `MLUT` | 20 | 1,474 | u16 slot, char\[10\] name of an `MLT` record |
+| `NAVP` | 80 | 1,327 | **UNVERIFIED** |
+| `REV` | 12 | 714 | char\[4\] revision, `1.22` |
+| `DTBL` | 28 | 714 | below |
+| `MTBL` | 340–13,024 | 660 | **UNVERIFIED** |
+| `MON`, `MOFF`, `ENDB` | 8 | 531 each | none |
+| `BLK` | 32 | 531 | **UNVERIFIED** |
+| `GPS` | 100 | 458 | below |
+| `BLKX` | 44 | 448 | **UNVERIFIED** |
+| `STAR` | 56–320 | 176 | **UNVERIFIED** |
+| `MUSI` | 24 | 172 | u16 slot, char\[14\] CD track name (§4) |
+| `PLNT` | 80 | 129 | **UNVERIFIED** |
+| `PALG` | 328 | 129 | **UNVERIFIED** |
+| `CLIM` | 32 | 129 | **UNVERIFIED** |
+| `LITE` | 40 | 129 | **UNVERIFIED** |
+| `INIT` | 28 | 129 | **UNVERIFIED** |
+| `VIEW` | 16 | 129 | **UNVERIFIED** |
+| `HRZM` | 32 | 129 | **UNVERIFIED** |
+| `HTXT` | 24 | 129 | **UNVERIFIED** |
+| `LTBL` | 24 | 129 | **UNVERIFIED** |
+| `ORDR` | 12 | 108 | **UNVERIFIED** |
+| `CAMO` | 16 | 105 | **UNVERIFIED** |
+| `FTBL` | 84, 108, 120 | 97 | **UNVERIFIED** |
+| `TSK` | 28–60 | 42 | **UNVERIFIED** |
+| `HGXP` | 597 | 17 | **UNVERIFIED** |
+| `HGBT` | 601 | 17 | **UNVERIFIED** |
+| `AFFL` | 12 | 8 | **UNVERIFIED** |
+| `PTBL` | 128–268 | 8 | **UNVERIFIED** |
+| `MLIT` | 24 | 1 | **UNVERIFIED** |
+
+The chunks whose layout is **UNVERIFIED** are settled one at a time by
+reading the handler each tag reaches from the tag table.
+
+**Name references.** `INCL`, `TLUT`, `MLUT` and `MUSI` store a u16 slot
+and then a name at chunk offset 0x0A, without its extension. The slot is
+0xFFFF in all 4,839 of them, and its meaning is **UNVERIFIED**. Every
+`TLUT` and `MLUT` name has both a `TLT` and an `MLT` record in the pack.
+In 54 of the 56 files that hold them, the two lists of names are equal.
+
+1,627 of the 1,719 `INCL` targets are in the pack or the installed tree.
+The other 92 name `OBJECT01`–`OBJECT03` and `EN00STAR`–`EN07STAR`.
+`OBJECT0?.BWD` is among the files the game generates (Loose files,
+below); that `EN0?STAR` is too is **UNVERIFIED**. The training scenario
+`M33_SCN1.BWD` includes `m33_tabl`, `formatns`, `m33_art1`, `gearsht1`,
+`m33_grnd` and `m33_obj1`.
+
+**Brackets.** Each of the 531 `MON` chunks is followed directly by a
+`BLK`, and each `ENDB` by a `MOFF`. The pairs nest properly in every
+file. `HG.INI` has "geometry cache block nesting error"
+(`SYSERR_BLOCKNEST`). `BTAG` opens a named group
+(`trainstr`, `gouser05`, `ROCK1`) and `ETAG` closes it. In 711 files no
+`BTAG` comes while another is open. In each of the other three, one
+`BTAG` is followed by the next with no `ETAG` between:
+- `BASEWALL` in `M01_OBJ1`;
+- `WALL` in `M03_OBJ1`;
+- `gouser05`, chunk 41, in `M33_SCN1`, which explains that file's 20
+  `BTAG` against 19 `ETAG`.
+
+Whether the engine nests the second group or replaces the first is
+**UNVERIFIED**. The reader accepts both and reports them. `ELSB`, `REPR`
+and `ENDR` (by position elseblock, rep, endrep) occur in no shipped
+file.
+
+**`GPS`.** NUL-padded text sits at four chunk offsets:
+- 0x24, char\[9\]: a `GDF` record's name in 455 of the 458 chunks; the
+  other 3 name `USERGEAR`, the loose `USERGEAR.GDF`;
+- 0x2D, char\[9\] (`mmb00std`, `hnt00std`): no pack record has this
+  name;
+- 0x36: `Infantry`, `Gear`;
+- 0x4C: a further name.
+
+What each field means is **UNVERIFIED**. A MechWarrior 2 community forum
+([mech2.org, "Invoking MW2"](https://www.mech2.org/forum/viewtopic.php?t=337)) places MW2's mech file name at 25h of a
+`GPS` tag, its configuration at 2Dh and the pilot's name at 36h. It
+also names a `USERSTAR.BWD`, a file Heavy Gear generates too. Two of
+the three offsets coincide with Heavy Gear's.
+
+**`DTBL`.** Its 20 data bytes are mostly zero. The u16 at chunk offset
+0x0E is non-zero in 180 files, and in 179 of them it equals the file's
+`OBJ` count. What the table counts is **UNVERIFIED**.
 
 ### Loose files
 
