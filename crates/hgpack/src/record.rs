@@ -23,6 +23,9 @@ pub const RECORD_HEADER_LEN: usize = 22;
 pub struct Record {
     /// Position of the record's entry in [`Index::entries`].
     pub entry: usize,
+    /// The header's method code, as stored.
+    pub code: u16,
+    /// What the code resolves to through the codec table.
     pub method: Method,
     pub unpacked: u32,
     pub packed: u32,
@@ -97,6 +100,7 @@ impl<'a> Pack<'a> {
             }
             records[i] = Some(Record {
                 entry: i,
+                code,
                 method: method(index, i, code)?,
                 unpacked,
                 packed,
