@@ -1,0 +1,7 @@
+.ledger/
+.scratch/
+result
+result-*
+target/
+.direnv/
+__pycache__/
