@@ -265,8 +265,10 @@ the music start routine parses the integer from its sixth character
 (`sscanf` with `"%d"` at RVA 0x1F29A). The Tour of Duty mission the shell
 generates, `RAN1SCN1.BWD`, carries `track2` and played CD track 2. The
 training mission opened the device and polled it for 40 s without
-sending `MCI_PLAY`; what its `MUSI` chunk holds is **UNVERIFIED** (the
-scenario is packed in `HEAVYG.PRJ`). Code: CD init at RVA 0x9E1EF, play
+sending `MCI_PLAY`. Its scenario, `M33_SCN1.BWD`, has no `MUSI` chunk,
+and neither do the six files it includes (§5, extracted from the pack
+on 2026-11-18), so that mission plays no music by design. Code: CD init
+at RVA 0x9E1EF, play
 at 0x9E1A9, mode poll at 0x9E2E3, mission music start at 0x1F26E,
 periodic retry at 0x1F3AC; `hgsnd.cfg` is read by the call at 0x85227.
 
@@ -280,18 +282,85 @@ Input: the shell loads `dinput8` and enumerates HID joysticks.
 
 ## 5. Data formats
 
-### HEAVYG.PRJ and HEAVYG.MAP
+### HEAVYG.MAP and HEAVYG.PRJ
 
-`HEAVYG.PRJ` starts with the bytes `43 3a 5c 50 52 4a 5c 41 57 41 56 00`
-(`C:\PRJ\AWAV\0`), then `02 00`, then `72 ea 00 00`, `00 a3 00 00`, then
-`78 9c`, which is a zlib stream header. The pack therefore holds named,
-zlib-compressed records (the game ships `ZLIB.DLL`). Record structure
-beyond the first entry: **UNVERIFIED**.
+`crates/hgpack` implements this subsection. `hgpack verify <game-dir>`
+and `contracts/pack.ncl` check it against the shipped files: on
+2026-11-18, 19,545 records accounted for all 96,187,673 bytes of the
+pack, and every record decoded to its stated size. All integers are
+little-endian. Text fields are NUL-padded.
 
-`HEAVYG.MAP` begins with a resource-type name table, in file order:
-`PCXX`, `WAVX`, `BRF`, `BWD`, `WAV`, `PAR`, `FNT`, `TBL`, `PCX`, `SHP`,
-`SDF`, `3DI`, `GDF`, `MLT`, `TLT`, `ODF`, `WTB`, `XEL`, `TEX`, `COL`.
-Index record layout: **UNVERIFIED**.
+`HEAVYG.MAP`, the index (391,108 B):
+
+| Offset | Size | Field | Shipped value |
+| ---: | ---: | :--- | :--- |
+| 0x00 | 4 | entry count *n* | 19,545 |
+| 0x04 | 4 | type count *t* | 20 |
+| 0x08 | 8 × *t* | type table: char\[4\] type, u32 entries of that type | below |
+| 0xA8 | 4 | reserved | 0, meaning **UNVERIFIED** |
+| 0xAC | 4 | codec count *c* | 2 |
+| 0xB0 | 16 × *c* | codec table: char\[16\] DLL name | `pkware.dll`, `zlib.dll` |
+| 0xD0 | 20 × *n* | entries: char\[8\] name, char\[4\] type, u32 pack offset, char\[4\] attribute | |
+
+The offsets after 0x08 are the shipped ones (*t* = 20, *c* = 2), and
+0xD0 + 20 × 19,545 = 391,108, the file's size. The type table, in file
+order: `PCXX` 630, `WAVX` 1,053, `BRF` 229, `BWD` 705, `WAV` 103, `PAR`
+1, `FNT` 27, `TBL` 20, `PCX` 789, `SHP` 788, `SDF` 451, `3DI` 147, `GDF`
+76, `MLT` 255, `TLT` 219, `ODF` 1,027, `WTB` 10,345, `XEL` 1,508, `TEX`
+1,119, `COL` 53. The counts sum to 19,545 and equal each type's tally
+among the entries.
+
+Entries ascend by the raw 8-byte name field, including any bytes after
+its NUL: 33 names carry such bytes (`ALLWHT\0Y`). Offsets ascend
+strictly in the same order. Whether the engine binary-searches the field
+is **UNVERIFIED**. The attribute reads `NONE` in every entry. It is not
+a codec key (see below), and its meaning is **UNVERIFIED**. Six keys
+occur more than once:
+- with identical headers: `AVOM204F.WAV` ×2 and `AVOSCDEC.WAVX` ×2;
+- with differing sizes: `B20UNDER.PCX` ×2, `B47UNDER.PCX` ×6,
+  `B48UNDER.PCX` ×6 and `O_1CRGZW.SDF` ×2.
+
+Which copy the engine loads is **UNVERIFIED**.
+
+`HEAVYG.PRJ`, the pack (96,187,673 B), is exactly the index's records
+end to end, in index order, with nothing between or after them. Each
+record is:
+
+| Size | Field |
+| ---: | :--- |
+| 12 | tag: `C:\PRJ\` + the name's first byte + the type, NUL-padded (`C:\PRJ\AWAV`); four-letter types fill the field (`C:\PRJ\AWAVX`) |
+| 2 | method: 0 stored; *k* is codec-table entry *k* − 1 |
+| 4 | unpacked size |
+| 4 | packed size |
+| packed size | data |
+
+The tag reads like a directory on the build machine, one per initial
+letter and type. This is an inference from its form.
+
+Methods in the shipped pack:
+
+| Method | Records | Streams | Types |
+| :--- | ---: | :--- | :--- |
+| 0, stored (unpacked = packed) | 2,302 | | `FNT`, `PAR` only |
+| 1, PKWare DCL implode | 1,419 | all start `00 04` (binary literals, 1 KiB dictionary) | `PCX`, `PCXX` only |
+| 2, zlib (RFC 1950) | 15,824 | all start `78 9c` | `3DI`, `COL`, `GDF`, `SDF`, `TBL`, `TEX`, `WAV`, `WAVX` only |
+
+`BRF`, `BWD`, `MLT`, `ODF`, `SHP`, `TLT`, `WTB` and `XEL` mix stored and
+zlib records. Unpacked, the records total 204,010,594 bytes. The pack
+compresses `PCX` and `PCXX`, and `WAV` and `WAVX`, alike. Whatever the
+`X` suffix marks is therefore inside the payloads, which is
+**UNVERIFIED**.
+
+The codec mapping rests on four observations:
+- `PKWARE.DLL` and `ZLIB.DLL` both export `Compress`, `GetKey` and
+  `Uncompress` (`objdump -p`).
+- `GetKey` copies `PKWARE` (`PKWARE.DLL` `.data` 0x1001CAB0) or `ZLIB`
+  (`ZLIB.DLL` 0x1000D030).
+- The codec table's order matches the streams' formats.
+- `HGSHELL.DLL` and `HGSIM.DLL` both contain the string `Uncompress`.
+
+Every PKWare record also decodes to its stated size with no input left
+over under `blast.c`, the reference decoder in zlib's `contrib/blast`.
 
 `CACHE.INI` gives per-type hash-table sizes and cache byte budgets for
 `tex pcx pcxx bmp tbl col clr shp xel wav 3di wtb gdf vdf odf sdf bwd fnt
@@ -308,6 +377,43 @@ mission tables, Gouraud / unmapped / mapped vertex records, a geometry
 cache with block nesting, and DOS-era leftovers (`digpak driver`, `x/ems`,
 `xems swap pages`). The engine lineage to Interstate '76 and MechWarrior 2
 is reported by community sources and is **UNVERIFIED** here.
+
+### BWD files
+
+First look, from two files walked on 2026-11-18. The two are the
+training scenario `M33_SCN1.BWD`, extracted with `hgpack`, and the
+generated Tour of Duty scenario `RAN1SCN1.BWD`, a loose file. A `BWD`
+file is a 12-byte header followed by chunks:
+- The header is char\[4\] `BWD\0`, a u32 total size equal to the file's
+  length, and a u32 of unknown meaning (0x1855 and 0x0575 in the two
+  files).
+- Each chunk is a char\[4\] tag (NUL-padded) and a u32 size that counts
+  the chunk's own 8 bytes, then its data.
+
+The chunks tile both files exactly. `M33_SCN1.BWD` (10,483 B) holds 74
+top-level chunks:
+
+| Tag | Count | Notes |
+| :--- | ---: | :--- |
+| `REV` | 1 | format revision, the text `1.22` |
+| `DTBL` | 1 | |
+| `INCL` | 6 | names another `BWD` to load; text at chunk offset 0x0A |
+| `CAMO` | 3 | |
+| `STAR` | 1 | |
+| `MTBL` | 3 | |
+| `BTAG` | 20 | |
+| `ETAG` | 19 | |
+| `GPS` | 3 | |
+| `NAVP` | 17 | |
+
+The six `INCL` targets are `m33_tabl`, `formatns`, `m33_art1`,
+`gearsht1`, `m33_grnd` and `m33_obj1`.
+
+`RAN1SCN1.BWD` (2,502 B) holds `REV` `1.22`, `DTBL`, `INCL`, `MUSI`
+`track2`, `STAR`, `MTBL` and more `INCL` chunks. `MUSI` puts its text at
+offset 0x0A too, which is where the scenario loader copies it from
+(§4). Whether `BTAG` and `ETAG` bracket nested groups, given 20 of one
+against 19 of the other, is **UNVERIFIED**.
 
 ### Loose files
 

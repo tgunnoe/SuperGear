@@ -26,8 +26,9 @@ behavioural oracle. Milestones, in order:
    describes media, binaries, data formats and runtime behaviour, each
    claim with evidence. **WIP.**
 3. **Reimplementation** — Rust crates that read the shipped data and, in
-   time, play the game; Nickel carries contracts and configuration. Not
-   started.
+   time, play the game; Nickel carries contracts and configuration.
+   **WIP:** `crates/hgpack` reads the resource pack completely (spec §5),
+   and `contracts/pack.ncl` checks the manifest it prints.
 
 ## Requirements
 
@@ -80,10 +81,6 @@ Each: statement · grounding · signpost (what defeats it).
 
 Each: statement · why open · signpost (what resolves it).
 
-- **U2 PRJ/MAP layout.** Record structure of `HEAVYG.PRJ` and the index in
-  `HEAVYG.MAP`. · Only the first record and the type table are decoded. ·
-  A Rust parser that enumerates every record and accounts for all
-  96,187,673 bytes.
 - **U3 Engine lineage.** Whether Interstate '76 / MechWarrior 2 format
   knowledge (Open76, community write-ups) transfers. · Reported by
   secondary sources only. · A byte-level match or mismatch between a
@@ -109,6 +106,15 @@ Each: statement · why open · signpost (what resolves it).
   Observed on both displays; `quartz` is disabled as a workaround, so no
   cutscene has played yet. · A cutscene playing to completion under Wine,
   or the blocking call located in a `+quartz,+winegstreamer` trace.
+- **U9 Pack residue.** Four facts about the resource pack that its bytes
+  alone don't settle (spec §5): what the entry attribute (`NONE`
+  everywhere) and the index's reserved word mean, which copy the engine
+  loads for a repeated key (six keys repeat; `B47UNDER.PCX` has six
+  differing copies), and what the `X` of `PCXX` and `WAVX` marks. ·
+  The pack decodes completely, but a reimplementation that loads the
+  wrong copy of a repeated key would diverge from the oracle. · The
+  index reader and lookup in `HGSHELL.DLL` or `HGSIM.DLL` located and
+  read, plus a `PCX`/`PCXX` and a `WAV`/`WAVX` payload pair compared.
 
 ## Spec Pointers
 
@@ -118,7 +124,8 @@ Each: statement · why open · signpost (what resolves it).
 
 ## Operational entrypoint
 
-1. Enter the environment: `nix develop` (until the first commit, `nix develop path:.`).
+1. Enter the environment: `nix develop`. The flake sees only files git
+   tracks, so `git add` new files first, or use `nix develop path:.`.
 2. Build the oracle: `scripts/wine-install.sh`, then `scripts/wine-run.sh`
    to play or `scripts/wine-smoke.sh` to verify headlessly. Disc 1 is
    read from `~/Downloads/Games/hg/` by default (`SUPERGEAR_MDF`
@@ -129,20 +136,35 @@ Each: statement · why open · signpost (what resolves it).
    `programs.cdemu.enable = true`, user in group `cdrom`):
    `scripts/wine-cdaudio.sh`, which the run and smoke scripts call, loads
    Disc 2 into it.
-3. Validate before committing: links with predicate's
-   `skills/doc-audit/scripts/check_docs.py .`; the tracker with
-   `nickel export .ledger/state/context_map.yaml --apply-contract <predicate>/ledger/contracts/context_map_apply.ncl`.
-4. Arsenal: predicate's `/spec` for normative statements, `/form` for data
+3. Read the pack: `cargo run -p hgpack --release -- verify <game-dir>`,
+   or `list [--json]`, or `extract <game-dir> <out-dir> [NAME.TYPE ...]`.
+   After `scripts/wine-install.sh` the game directory is
+   `~/.local/share/supergear/wine/drive_c/Games/HeavyGear`. Extract into
+   `.scratch/` or another ignored directory, never into tracked paths
+   (I1).
+4. Validate before committing:
+   - `nix flake check`: builds `hgpack`, runs its tests (contract tests
+     included), and runs clippy and rustfmt, for the host's system.
+     `nix flake check --all-systems` adds aarch64-linux, which this host
+     builds through binfmt emulation (slowly).
+   - The tests that need the installed game:
+     `SUPERGEAR_GAME=<game-dir> cargo test -p hgpack --release -- --include-ignored`.
+   - Links: predicate's `skills/doc-audit/scripts/check_docs.py .`.
+   - The tracker:
+     `nickel export .ledger/state/context_map.yaml --apply-contract <predicate>/ledger/contracts/context_map_apply.ncl`.
+5. Arsenal: predicate's `/spec` for normative statements, `/form` for data
    format models, `/prior-art` before any parser or protocol, `/core` for
    Rust work; Wine's `WINEDEBUG` channels and `winedbg`, `objdump -p`,
    `7z`, `Xvfb` for the oracle.
 
 ## Structure
 
-- **Core:** `docs/spec/` (the deliverable), `AGENTS.md` (this anchor).
+- **Core:** `docs/spec/` (the deliverable), `AGENTS.md` (this anchor),
+  `crates/` (the Rust workspace: `hgpack`, the resource-pack reader and
+  its command), `contracts/` (Nickel contracts over data the crates
+  derive: `pack.ncl`).
 - **Host integration:** `scripts/` (disc conversion, Wine prefix, smoke
-  test), `flake.nix` (toolchain for both targets).
+  test), `flake.nix` (toolchain, `hgpack` package and checks, for both
+  targets).
 - **Volatile:** `.scratch/` (uncommitted working set), `.ledger/`
   (predicate flight recorder, its own repository).
-- **Planned, not present:** a Rust workspace under `crates/` once the first
-  format parser is written.
