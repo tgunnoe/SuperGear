@@ -8,11 +8,12 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      # The pack reader and its command. Building it runs the test suite,
-      # contract tests included (they call nickel). Tests that need the
-      # installed game are #[ignore]d and do not run here.
-      buildHgpack = pkgs: pkgs.rustPlatform.buildRustPackage {
-        pname = "hgpack";
+      # The workspace's commands: hgpack (the resource pack) and hgbwd (BWD
+      # files). Building it runs every crate's tests, contract tests
+      # included (they call nickel). Tests that need the installed game are
+      # #[ignore]d and do not run here.
+      buildTools = pkgs: pkgs.rustPlatform.buildRustPackage {
+        pname = "supergear-tools";
         version = "0.1.0";
         src = pkgs.lib.fileset.toSource {
           root = ./.;
@@ -23,8 +24,8 @@
       };
 
       # clippy with warnings as errors, and rustfmt, over the same sources.
-      lint = pkgs: (buildHgpack pkgs).overrideAttrs (old: {
-        pname = "hgpack-lint";
+      lint = pkgs: (buildTools pkgs).overrideAttrs (old: {
+        pname = "supergear-lint";
         nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.clippy pkgs.rustfmt ];
         buildPhase = ''
           cargo fmt --all -- --check
@@ -35,14 +36,14 @@
       });
     in
     {
-      packages = forAll (pkgs: let hgpack = buildHgpack pkgs; in {
-        inherit hgpack;
-        default = hgpack;
+      packages = forAll (pkgs: let tools = buildTools pkgs; in {
+        inherit tools;
+        default = tools;
       });
 
       checks = forAll (pkgs: {
-        hgpack = buildHgpack pkgs;
-        hgpack-lint = lint pkgs;
+        tools = buildTools pkgs;
+        lint = lint pkgs;
       });
 
       devShells = forAll (pkgs: {
