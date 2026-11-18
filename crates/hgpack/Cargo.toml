@@ -1,0 +1,15 @@
+[package]
+name = "hgpack"
+version = "0.1.0"
+description = "Reader for Heavy Gear's resource pack: the HEAVYG.MAP index and the HEAVYG.PRJ records"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+explode = "0.1.2"
+miniz_oxide = "0.9.1"
+serde_json = "1"
+
+[dev-dependencies]
+proptest = "1"
