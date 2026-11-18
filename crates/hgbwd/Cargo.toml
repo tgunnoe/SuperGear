@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[dependencies]
+serde_json = "1"
+
 [dev-dependencies]
 hgpack = { path = "../hgpack" }
 proptest = "1"
