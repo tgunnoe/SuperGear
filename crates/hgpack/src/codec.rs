@@ -50,7 +50,7 @@ impl Codec {
     pub(crate) fn decode(self, packed: &[u8], limit: u32) -> Result<Vec<u8>, Failure> {
         let limit = limit as usize;
         match self {
-            Codec::Pkware => explode_limited(packed, limit),
+            Codec::Pkware => explode_limited(packed, limit, &mut [0; 4096]),
             Codec::Zlib => miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(packed, limit)
                 .map_err(|e| match e.status {
                     miniz_oxide::inflate::TINFLStatus::HasMoreOutput => Failure::Overlong,
@@ -61,13 +61,16 @@ impl Codec {
 }
 
 /// `explode::explode`, stopping once the output passes `limit` bytes.
-fn explode_limited(packed: &[u8], limit: usize) -> Result<Vec<u8>, Failure> {
+/// `window` is the decoder's output buffer, drained each time it fills.
+fn explode_limited(packed: &[u8], limit: usize, window: &mut [u8]) -> Result<Vec<u8>, Failure> {
     let mut decoder = explode::Explode::new();
-    let mut window = [0; 4096];
-    let mut buf = decoder.with_buffer(&mut window);
+    let mut buf = decoder.with_buffer(window);
     let mut out = Vec::new();
-    for &byte in packed {
+    let mut at = 0;
+    while let Some(&byte) = packed.get(at) {
         match buf.feed(byte) {
+            // The window is full or the stream has ended. The decoder has
+            // not finished with `byte`: it must be fed again.
             Ok(()) => {
                 out.extend_from_slice(buf.get());
                 if out.len() > limit {
@@ -78,7 +81,7 @@ fn explode_limited(packed: &[u8], limit: usize) -> Result<Vec<u8>, Failure> {
                 }
                 buf.reset();
             }
-            Err(explode::Error::IncompleteInput) => {}
+            Err(explode::Error::IncompleteInput) => at += 1,
             Err(e) => return Err(Failure::Rejected(format!("{e:?}"))),
         }
     }
@@ -113,6 +116,16 @@ mod tests {
     fn pkware_decodes_the_blast_vector() {
         assert_eq!(
             Codec::Pkware.decode(&BLAST_VECTOR, 13).unwrap(),
+            b"AIAIAIAIAIAIA"
+        );
+    }
+
+    #[test]
+    fn pkware_drains_a_window_smaller_than_the_output() {
+        // A one-byte window fills on every output byte, as the real 4 KiB
+        // window does on every record larger than it.
+        assert_eq!(
+            explode_limited(&BLAST_VECTOR, 13, &mut [0; 1]).unwrap(),
             b"AIAIAIAIAIAIA"
         );
     }
