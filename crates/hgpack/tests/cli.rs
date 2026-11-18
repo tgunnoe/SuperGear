@@ -140,6 +140,35 @@ fn extract_selects_keys_ignoring_case_and_rejects_unknown_ones() {
     assert!(text(&out.stderr).contains("NOPE.BWD"));
 }
 
+/// `hgpack list | head` must stop quietly when its reader goes away. The
+/// listing is several pipe buffers long, so the command is still writing
+/// when the pipe closes.
+#[test]
+fn list_survives_a_closed_pipe() {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let dir = Dir::new("pipe");
+    let names: Vec<Vec<u8>> = (0..5000).map(|i| format!("N{i:05}").into_bytes()).collect();
+    let records: Vec<_> = names
+        .iter()
+        .map(|n| (n.as_slice(), "BWD", false, b"x".as_slice()))
+        .collect();
+    write_pack(&dir.0, &records);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hgpack"))
+        .args(["list", dir.0.to_str().unwrap()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first = [0u8; 64];
+    child.stdout.take().unwrap().read_exact(&mut first).unwrap(); // the pipe closes as the handle drops here
+    let out = child.wait_with_output().unwrap();
+    assert!(text(&first).starts_with("N00000.BWD"), "{}", text(&first));
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stderr), "");
+}
+
 #[test]
 fn bad_usage_exits_2() {
     for args in [&[][..], &["frobnicate"][..], &["verify"][..]] {

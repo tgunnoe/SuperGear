@@ -5,6 +5,7 @@
 //! caller says; they are game data and stay out of git (AGENTS.md I1).
 
 use std::collections::HashMap;
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -18,22 +19,49 @@ const USAGE: &str = "usage:
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let mut out = BufWriter::new(io::stdout().lock());
     let result = match args.as_slice() {
-        ["list", dir] => list(dir.as_ref(), false),
-        ["list", "--json", dir] => list(dir.as_ref(), true),
-        ["extract", dir, out, keys @ ..] => extract(dir.as_ref(), out.as_ref(), keys),
-        ["verify", dir] => verify(dir.as_ref()),
+        ["list", dir] => list(&mut out, dir.as_ref(), false),
+        ["list", "--json", dir] => list(&mut out, dir.as_ref(), true),
+        ["extract", dir, dest, keys @ ..] => extract(&mut out, dir.as_ref(), dest.as_ref(), keys),
+        ["verify", dir] => verify(&mut out, dir.as_ref()),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
         }
     };
-    match result {
+    match result.and_then(|code| out.flush().map(|()| code).map_err(Failure::from)) {
         Ok(code) => code,
-        Err(message) => {
+        // The reader has gone (`hgpack list | head`): nothing is left to say.
+        Err(Failure::Stdout(e)) if e.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+        Err(Failure::Stdout(e)) => {
+            eprintln!("hgpack: stdout: {e}");
+            ExitCode::from(1)
+        }
+        Err(Failure::Message(message)) => {
             eprintln!("hgpack: {message}");
             ExitCode::from(1)
         }
+    }
+}
+
+/// Why a command stopped: a message for stderr, or a failed write to
+/// stdout, which `main` tells apart from the rest. A bare `io::Error`
+/// converts to `Stdout`, so other I/O errors become messages first.
+enum Failure {
+    Message(String),
+    Stdout(io::Error),
+}
+
+impl From<String> for Failure {
+    fn from(message: String) -> Failure {
+        Failure::Message(message)
+    }
+}
+
+impl From<io::Error> for Failure {
+    fn from(e: io::Error) -> Failure {
+        Failure::Stdout(e)
     }
 }
 
@@ -100,7 +128,7 @@ fn method_name(m: Method) -> &'static str {
     }
 }
 
-fn list(dir: &Path, json: bool) -> Result<ExitCode, String> {
+fn list(out: &mut impl Write, dir: &Path, json: bool) -> Result<ExitCode, Failure> {
     let game = Game::load(dir)?;
     let pack = game.pack()?;
     let index = &game.index;
@@ -132,18 +160,19 @@ fn list(dir: &Path, json: bool) -> Result<ExitCode, String> {
                 .collect::<Vec<_>>(),
             "entries": entries,
         });
-        println!("{manifest}");
+        writeln!(out, "{manifest}")?;
     } else {
         for r in pack.records() {
             let e = &index.entries[r.entry];
-            println!(
+            writeln!(
+                out,
                 "{:<13} {:>9} {:<6} {:>8} {:>8}",
                 e.key(),
                 e.offset,
                 method_name(r.method),
                 r.packed,
                 r.unpacked
-            );
+            )?;
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -162,7 +191,12 @@ fn file_name(key: &str) -> String {
         .collect()
 }
 
-fn extract(dir: &Path, out: &Path, keys: &[&str]) -> Result<ExitCode, String> {
+fn extract(
+    out: &mut impl Write,
+    dir: &Path,
+    dest: &Path,
+    keys: &[&str],
+) -> Result<ExitCode, Failure> {
     let game = Game::load(dir)?;
     let pack = game.pack()?;
     let index = &game.index;
@@ -173,9 +207,9 @@ fn extract(dir: &Path, out: &Path, keys: &[&str]) -> Result<ExitCode, String> {
             .iter()
             .any(|e| e.key().eq_ignore_ascii_case(k))
     }) {
-        return Err(format!("no entry {missing}"));
+        return Err(format!("no entry {missing}").into());
     }
-    std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    std::fs::create_dir_all(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     let mut seen: HashMap<String, usize> = HashMap::new();
     let (mut written, mut failed) = (0usize, 0usize);
     for r in pack.records() {
@@ -192,7 +226,7 @@ fn extract(dir: &Path, out: &Path, keys: &[&str]) -> Result<ExitCode, String> {
         *copy += 1;
         match pack.decode(r) {
             Ok(bytes) => {
-                let path = out.join(&name);
+                let path = dest.join(&name);
                 std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
                 written += 1;
             }
@@ -202,7 +236,7 @@ fn extract(dir: &Path, out: &Path, keys: &[&str]) -> Result<ExitCode, String> {
             }
         }
     }
-    println!("extracted {written} records to {}", out.display());
+    writeln!(out, "extracted {written} records to {}", dest.display())?;
     Ok(if failed == 0 {
         ExitCode::SUCCESS
     } else {
@@ -210,7 +244,7 @@ fn extract(dir: &Path, out: &Path, keys: &[&str]) -> Result<ExitCode, String> {
     })
 }
 
-fn verify(dir: &Path) -> Result<ExitCode, String> {
+fn verify(out: &mut impl Write, dir: &Path) -> Result<ExitCode, Failure> {
     let game = Game::load(dir)?;
     let report = game.pack()?.verify();
     for e in &report.failures {
@@ -227,7 +261,7 @@ fn verify(dir: &Path) -> Result<ExitCode, String> {
         ("failures", report.failures.len() as u64),
     ];
     for (k, v) in rows {
-        println!("{k:<10} {v}");
+        writeln!(out, "{k:<10} {v}")?;
     }
     Ok(if report.failures.is_empty() {
         ExitCode::SUCCESS
