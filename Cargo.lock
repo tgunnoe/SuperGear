@@ -102,6 +102,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hgbwd"
+version = "0.1.0"
+dependencies = [
+ "hgpack",
+ "proptest",
+]
+
+[[package]]
 name = "hgpack"
 version = "0.1.0"
 dependencies = [

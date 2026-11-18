@@ -1,0 +1,11 @@
+[package]
+name = "hgbwd"
+version = "0.1.0"
+description = "Reader for Heavy Gear's BWD files: the tagged chunks of its scenarios, maps and object placements"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dev-dependencies]
+hgpack = { path = "../hgpack" }
+proptest = "1"
